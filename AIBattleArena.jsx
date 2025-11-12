@@ -49,6 +49,45 @@ const TRAITS = [
   }
 ];
 
+const DIFFICULTIES = {
+  recruit: {
+    id: "recruit",
+    label: "Recruit",
+    desc: "Forgiving foes with lighter builds and shaky accuracy.",
+    bonusPoints: -2,
+    hpMul: 0.92,
+    dmgMul: 0.92,
+    defMul: 0.9,
+    accBonus: -0.05,
+    evaBonus: -0.02
+  },
+  veteran: {
+    id: "veteran",
+    label: "Veteran",
+    desc: "Balanced opponents. The classic arena experience.",
+    bonusPoints: 0,
+    hpMul: 1,
+    dmgMul: 1,
+    defMul: 1,
+    accBonus: 0,
+    evaBonus: 0
+  },
+  champion: {
+    id: "champion",
+    label: "Champion",
+    desc: "Elite duelists with sharper instincts and tougher defenses.",
+    bonusPoints: 3,
+    hpMul: 1.12,
+    dmgMul: 1.08,
+    defMul: 1.05,
+    accBonus: 0.05,
+    evaBonus: 0.02,
+    critBonus: 0.04,
+    skillBonus: 0.03,
+    spdMul: 1.04
+  }
+};
+
 const PRESETS = {
   "Glass Cannon": { STR: 9, AGI: 6, INT: 3, VIT: 2, trait: "aggressive" },
   "Swift Duelist": { STR: 4, AGI: 10, INT: 3, VIT: 3, trait: "precise" },
@@ -98,7 +137,48 @@ function formatPct(x) {
   return Math.round(x * 100);
 }
 
-function createAI(level = 1) {
+function allocateBonus(spread, points) {
+  const sign = Math.sign(points);
+  let remaining = Math.abs(points);
+  while (remaining > 0) {
+    const key = choice(STAT_KEYS);
+    spread[key] = clamp(spread[key] + sign, 1, 15);
+    remaining -= 1;
+  }
+}
+
+function applyDifficulty(stats, difficultyId) {
+  const diff = DIFFICULTIES[difficultyId] ?? DIFFICULTIES.veteran;
+  const next = { ...stats };
+  if (diff.hpMul && diff.hpMul !== 1) {
+    next.hp = Math.round(next.hp * diff.hpMul);
+  }
+  if (diff.spdMul && diff.spdMul !== 1) {
+    next.spd *= diff.spdMul;
+  }
+  if (diff.dmgMul && diff.dmgMul !== 1) {
+    next.dmgMul *= diff.dmgMul;
+  }
+  if (diff.defMul && diff.defMul !== 1) {
+    next.defMul *= diff.defMul;
+  }
+  if (diff.accBonus) {
+    next.acc = clamp(next.acc + diff.accBonus, 0, 1.25);
+  }
+  if (diff.evaBonus) {
+    next.eva = clamp(next.eva + diff.evaBonus, 0, 0.6);
+  }
+  if (diff.critBonus) {
+    next.crit = clamp(next.crit + diff.critBonus, 0, 0.75);
+  }
+  if (diff.skillBonus) {
+    next.skill = clamp(next.skill + diff.skillBonus, 0, 0.9);
+  }
+  return next;
+}
+
+function createAI(difficultyId = "veteran") {
+  const diff = DIFFICULTIES[difficultyId] ?? DIFFICULTIES.veteran;
   // AI tries to counter player's stat skew
   const archetypes = Object.keys(PRESETS);
   const preset = PRESETS[choice(archetypes)];
@@ -118,10 +198,14 @@ function createAI(level = 1) {
   ["STR", "AGI", "INT", "VIT"].forEach((k) => {
     spread[k] = clamp(spread[k] + randInt(-1, 1), 1, 12);
   });
+  if (diff.bonusPoints) {
+    allocateBonus(spread, diff.bonusPoints);
+  }
   return {
     name: name + " (CPU)",
     trait: spread.trait,
-    build: { STR: spread.STR, AGI: spread.AGI, INT: spread.INT, VIT: spread.VIT }
+    build: { STR: spread.STR, AGI: spread.AGI, INT: spread.INT, VIT: spread.VIT },
+    difficulty: diff.id
   };
 }
 
@@ -240,16 +324,14 @@ export default function AIBattleArena() {
   const [points, setPoints] = useState(BASE_POINTS);
   const [stats, setStats] = useState({ STR: 5, AGI: 5, INT: 5, VIT: 5 });
   const [trait, setTrait] = useState("precise");
-  const [ai, setAI] = useState(createAI());
+  const [difficulty, setDifficulty] = useState("veteran");
+  const [ai, setAI] = useState(() => createAI("veteran"));
   const [battle, setBattle] = useState(null);
   const [log, setLog] = useState([]);
   const [autoFight, setAutoFight] = useState(false);
 
   const playerStats = useMemo(() => applyTrait(deriveStats(stats), trait), [stats, trait]);
-  const aiStats = useMemo(
-    () => applyTrait(deriveStats(ai.build), ai.trait),
-    [ai]
-  );
+  const aiStats = useMemo(() => applyDifficulty(applyTrait(deriveStats(ai.build), ai.trait), ai.difficulty), [ai]);
 
   function remainingPoints(next = stats) {
     const used = STAT_KEYS.reduce((acc, k) => acc + (next[k] - 5), 0);
@@ -287,8 +369,9 @@ export default function AIBattleArena() {
       ...aiStats
     };
     setBattle({ p, e, round: 1, over: false });
+    const diffLabel = DIFFICULTIES[ai.difficulty]?.label ?? "Veteran";
     setLog([
-      `⚔️ Battle started: ${name} (${trait}) vs ${ai.name} (${ai.trait})`,
+      `⚔️ Battle started: ${name} (${trait}) vs ${ai.name} (${ai.trait}, ${diffLabel})`,
       `— ${name} HP ${p.cur}/${p.hp} | ${ai.name} HP ${e.cur}/${e.hp}`
     ]);
   }
@@ -354,7 +437,9 @@ export default function AIBattleArena() {
   }, [autoFight, battle]);
 
   function resetAI() {
-    setAI(createAI());
+    setAI(() => createAI(difficulty));
+    setBattle(null);
+    setLog([]);
   }
 
   function resetBuild() {
@@ -475,9 +560,29 @@ export default function AIBattleArena() {
         </Card>
 
         <Card>
-          <div className="mb-2 flex items-center justify-between">
+          <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
             <div className="text-sm font-semibold">Opponent</div>
-            <div className="flex gap-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <label className="text-xs text-zinc-300">
+                Difficulty
+                <select
+                  value={difficulty}
+                  onChange={(e) => {
+                    const next = e.target.value;
+                    setDifficulty(next);
+                    setAI(() => createAI(next));
+                    setBattle(null);
+                    setLog([]);
+                  }}
+                  className="ml-2 rounded-lg border border-zinc-700 bg-zinc-900/70 px-2 py-1 text-xs"
+                >
+                  {Object.values(DIFFICULTIES).map((d) => (
+                    <option key={d.id} value={d.id}>
+                      {d.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
               <button
                 onClick={resetAI}
                 className="rounded-xl border border-zinc-700 px-3 py-1 text-xs hover:bg-zinc-800"
@@ -487,7 +592,8 @@ export default function AIBattleArena() {
             </div>
           </div>
           <div className="text-sm font-semibold">{ai.name}</div>
-          <div className="mb-2 text-xs text-zinc-400">Trait: {TRAITS.find(t=>t.id===ai.trait)?.name}</div>
+          <div className="mb-1 text-xs text-zinc-400">Trait: {TRAITS.find(t=>t.id===ai.trait)?.name}</div>
+          <div className="mb-3 text-xs text-zinc-400">{DIFFICULTIES[ai.difficulty]?.desc}</div>
           <div className="grid grid-cols-2 gap-3">
             <div>
               <StatBar label="HP" value={aiStats.hp} max={200} />
@@ -501,6 +607,7 @@ export default function AIBattleArena() {
               <div className="text-xs text-zinc-300">Crit {formatPct(aiStats.crit * aiStats.critMul)}%</div>
               <div className="text-xs text-zinc-300">Skill {formatPct(aiStats.skill * aiStats.skillMul)}%</div>
               <div className="text-xs text-zinc-300">Build: {STAT_KEYS.map(k=>`${k}${ai.build[k]}`).join("/")}</div>
+              <div className="text-xs text-zinc-300">Difficulty: {DIFFICULTIES[ai.difficulty]?.label}</div>
             </div>
           </div>
         </Card>
