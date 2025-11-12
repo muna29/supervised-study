@@ -1,0 +1,970 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AI Battle Arena: Overdrive Edition</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <style>
+      body { background: radial-gradient(circle at top, #1a1a2e, #0a0a0f 60%); }
+      .glass-panel { background: rgba(17, 25, 40, 0.7); backdrop-filter: blur(16px); }
+    </style>
+  </head>
+  <body class="min-h-screen text-slate-100 font-sans">
+    <div id="root" class="p-4 sm:p-10 space-y-6"></div>
+    <script type="text/babel">
+      const { useMemo, useState, useEffect } = React;
+
+      const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
+      const rand = (min, max) => Math.random() * (max - min) + min;
+      const randInt = (min, max) => Math.floor(rand(min, max + 1));
+      const chance = (p) => Math.random() < p;
+      const pick = (list) => list[Math.floor(Math.random() * list.length)];
+
+      const BASE_POINTS = 28;
+      const CORE_STATS = ["STR", "AGI", "INT", "VIT", "WIL"];
+
+      const TRAITS = [
+        { id: "berserker", name: "Berserker", desc: "+16% damage, +10 resolve below 40% HP", mods: { dmgMul: 1.16, clutch: 0.1 } },
+        { id: "sentinel", name: "Sentinel", desc: "-10% damage taken, -8% speed", mods: { dmgTakenMul: 0.9, spdMul: 0.92 } },
+        { id: "oracle", name: "Oracle", desc: "+12% crit, unlocks Precognition counter", mods: { critMul: 1.12, counter: 0.16 } },
+        { id: "chronomancer", name: "Chronomancer", desc: "Small chance to take two turns", mods: { extraTurn: 0.12, spdMul: 1.1 } },
+        { id: "symbiote", name: "Symbiote", desc: "Stacks lifesteal & adaptive defense", mods: { lifesteal: 0.18, adaptive: true } },
+        { id: "technomancer", name: "Technomancer", desc: "Augments gain +25% effect", mods: { augmentBoost: 1.25 } },
+        { id: "gladiator", name: "Gladiator", desc: "+8% all stats, +20 combo cap", mods: { omni: 1.08, comboCap: 20 } },
+        { id: "phantom", name: "Phantom", desc: "+18% evade, 25% damage while cloaked", mods: { evaMul: 1.18, cloak: true } }
+      ];
+
+      const COMBAT_STYLES = [
+        { id: "aerial", name: "Aerial Vanguard", desc: "High initiative chain attacks", mods: { spdMul: 1.18, comboGain: 12 } },
+        { id: "gravity", name: "Gravity Breaker", desc: "Heavy burst, armor shred", mods: { dmgMul: 1.22, shred: 0.18, spdMul: 0.95 } },
+        { id: "neural", name: "Neural Weaver", desc: "Adaptive counters, psi-burn", mods: { counter: 0.12, psiBurn: 0.1 } },
+        { id: "draconic", name: "Draconic Form", desc: "Overheat resource, flames", mods: { overheat: true, dmgMul: 1.12, resistMul: 1.1 } },
+        { id: "quantum", name: "Quantum Echo", desc: "Duplicate strikes, timeline steals", mods: { duplicate: 0.2, timelineSteal: 0.05 } },
+        { id: "astral", name: "Astral Ascendant", desc: "Soul shield, true damage bursts", mods: { soulShield: 0.2, trueDamage: 0.08 } }
+      ];
+
+      const SIGNATURE_MOVES = [
+        { id: "nova_drive", name: "Nova Drive", desc: "Massive burst that ramps with combo", base: 34, meter: 20 },
+        { id: "phantom_waltz", name: "Phantom Waltz", desc: "Guaranteed crit follow-up", base: 22, meter: 25 },
+        { id: "emp_wave", name: "EMP Wave", desc: "Silences augments & drains meter", base: 18, meter: 30 },
+        { id: "umbra_chains", name: "Umbra Chains", desc: "Applies bleed for 3 rounds", base: 16, meter: 22 },
+        { id: "starlance", name: "Starlance", desc: "True damage spear with piercing", base: 28, meter: 35 },
+        { id: "dragon_roar", name: "Dragon's Roar", desc: "Applies Overheat to enemy", base: 24, meter: 28 }
+      ];
+
+      const ULTIMATE_ABILITIES = [
+        { id: "limit_break", name: "Limit Break", desc: "Consumes all meter to unleash multi-hit combo", req: 80 },
+        { id: "time_reversal", name: "Time Reversal", desc: "Undo last 40% damage taken, skip enemy turn", req: 70 },
+        { id: "ascendant_guard", name: "Ascendant Guard", desc: "Gain shield equal to 60% max HP", req: 90 },
+        { id: "anima_surge", name: "Anima Surge", desc: "Double damage and lifesteal for one round", req: 85 },
+        { id: "nebula_gate", name: "Nebula Gate", desc: "Tag in astral avatar for 2 rounds", req: 100 }
+      ];
+
+      const AUGMENTS = [
+        { id: "kinetic_tuner", name: "Kinetic Tuner", desc: "+10% combo gain, +4 speed" },
+        { id: "ion_barrier", name: "Ion Barrier", desc: "Absorb first 25 incoming damage" },
+        { id: "nanoforge", name: "Nanoforge", desc: "Regenerate 8 HP per round" },
+        { id: "plasma_edge", name: "Plasma Edge", desc: "+14% crit damage" },
+        { id: "echo_drive", name: "Echo Drive", desc: "Chance to repeat signature move" },
+        { id: "aether_lattice", name: "Aether Lattice", desc: "Gain shield scaling with INT" },
+        { id: "blood_rune", name: "Blood Rune", desc: "+12% lifesteal while under 50% HP" },
+        { id: "sentinel_matrix", name: "Sentinel Matrix", desc: "Boosts resistances by 15%" }
+      ];
+
+      const ARENAS = [
+        { id: "sky_colosseum", name: "Sky Colosseum", hazard: "Cyclone Gusts", bonus: "+8% aerial damage", weather: ["Clear","Jetstream","Lightning"] },
+        { id: "abyss_core", name: "Abyss Core", hazard: "Dark Matter Pulse", bonus: "Gain barrier on crit", weather: ["Void Storm","Singularity"] },
+        { id: "solstice_spire", name: "Solstice Spire", hazard: "Solar Flares", bonus: "+10% fire damage", weather: ["Radiant","Overheat"] },
+        { id: "neon_nexus", name: "Neon Nexus", hazard: "Security Drones", bonus: "Hack chance +", weather: ["Cyber Rain","EMP"] },
+        { id: "verdant_lab", name: "Verdant Lab", hazard: "Mutagenic Spores", bonus: "Lifesteal enhanced", weather: ["Bloom","Toxic"] }
+      ];
+
+      const GAME_MODES = [
+        {
+          id: "arcade_gauntlet",
+          name: "Arcade Gauntlet",
+          desc: "Battle through scaling waves with escalating hazards and crowd buffs.",
+          rounds: 6,
+          modifiers: { hpMul: 1, dmgMul: 1, hazardIntensity: 1, bonusMeter: 4 }
+        },
+        {
+          id: "raid_protocol",
+          name: "Co-op Raid Protocol",
+          desc: "Bring a support synth, coordinate tag-team supers against raid bosses.",
+          rounds: 8,
+          modifiers: { hpMul: 1.2, dmgMul: 0.95, supportAlly: true, hazardIntensity: 1.3, bonusMeter: 6 }
+        },
+        {
+          id: "chrono_clash",
+          name: "Chrono Clash",
+          desc: "Timeline fractures enable rewinds, paradox counters, and initiative swaps.",
+          rounds: 5,
+          modifiers: { hpMul: 0.95, dmgMul: 1.1, timeSkips: 0.18, hazardIntensity: 0.8, bonusMeter: 5 }
+        },
+        {
+          id: "rift_rush",
+          name: "Rift Rush Survival",
+          desc: "Endless rift anomalies stack buffs & curses each round.",
+          rounds: 10,
+          modifiers: { hpMul: 1.05, dmgMul: 1, hazardIntensity: 1.6, anomalyStacks: true, bonusMeter: 7 }
+        },
+        {
+          id: "boss_gauntlet",
+          name: "Mythic Boss Gauntlet",
+          desc: "Face legendary champions with unique mechanics each stage.",
+          rounds: 7,
+          modifiers: { hpMul: 1.15, dmgMul: 1.18, bossTraits: true, hazardIntensity: 1.2, bonusMeter: 8 }
+        }
+      ];
+
+      const SUPPORT_SYNTHS = [
+        { id: "aurora", name: "Aurora", effect: "Restore 8 HP to the lowest ally each round." },
+        { id: "atlas", name: "Atlas", effect: "Grant +15 shield when a hazard triggers." },
+        { id: "nyx", name: "Nyx", effect: "Adds +8% to combo damage while cloaked." },
+        { id: "helio", name: "Helio", effect: "Build 12 extra meter on signature moves." }
+      ];
+
+      const BOSS_MECHANICS = [
+        "Fracture Barrier: ignores first 30 damage each round",
+        "Gravity Lash: pulls opponent, reducing evade",
+        "Phantom Mirage: clones reduce accuracy",
+        "Titanforge Armor: scales defense with your STR",
+        "Anima Drain: siphons meter every other turn"
+      ];
+
+      const DEFAULT_FIGHTER = {
+        name: "Aurora Flux",
+        story: "Cybernetic duelist seeking the lost Oracles.",
+        stats: { STR: 6, AGI: 8, INT: 7, VIT: 5, WIL: 4 },
+        trait: "chronomancer",
+        style: "aerial",
+        signature: "nova_drive",
+        ultimate: "limit_break",
+        augments: ["kinetic_tuner", "plasma_edge"],
+        color: "#8ef1ff",
+        emblem: "⚡"
+      };
+
+      const RIVAL_PRESETS = [
+        {
+          name: "Kaiser Helix",
+          story: "Genetic sovereign wielding plasma lances.",
+          stats: { STR: 9, AGI: 5, INT: 6, VIT: 7, WIL: 4 },
+          trait: "berserker",
+          style: "gravity",
+          signature: "dragon_roar",
+          ultimate: "anima_surge",
+          augments: ["nanoforge", "ion_barrier"],
+          color: "#ff6b6b",
+          emblem: "🛡"
+        },
+        {
+          name: "Nyx Mirage",
+          story: "Temporal rogue phasing between timelines.",
+          stats: { STR: 5, AGI: 9, INT: 7, VIT: 4, WIL: 6 },
+          trait: "phantom",
+          style: "quantum",
+          signature: "phantom_waltz",
+          ultimate: "time_reversal",
+          augments: ["echo_drive", "plasma_edge"],
+          color: "#c084fc",
+          emblem: "🕛"
+        },
+        {
+          name: "Bastion Ark",
+          story: "Solar paladin of the Solstice Spire.",
+          stats: { STR: 8, AGI: 6, INT: 5, VIT: 8, WIL: 6 },
+          trait: "sentinel",
+          style: "draconic",
+          signature: "dragon_roar",
+          ultimate: "ascendant_guard",
+          augments: ["sentinel_matrix", "nanoforge"],
+          color: "#f97316",
+          emblem: "🌞"
+        },
+        {
+          name: "Cipher Umbral",
+          story: "Void hacker wielding forbidden psionics.",
+          stats: { STR: 4, AGI: 7, INT: 9, VIT: 5, WIL: 7 },
+          trait: "oracle",
+          style: "neural",
+          signature: "umbra_chains",
+          ultimate: "nebula_gate",
+          augments: ["echo_drive", "aether_lattice"],
+          color: "#5eead4",
+          emblem: "🕱"
+        }
+      ];
+
+      function deriveStats(base) {
+        const STR = base.STR ?? 5;
+        const AGI = base.AGI ?? 5;
+        const INT = base.INT ?? 5;
+        const VIT = base.VIT ?? 5;
+        const WIL = base.WIL ?? 5;
+        const hp = 90 + VIT * 14;
+        const atk = 11 + STR * 4;
+        const psi = 10 + INT * 4.2;
+        const def = 9 + VIT * 2.8 + WIL * 1.2;
+        const res = 0.08 + WIL * 0.015;
+        const spd = 1 + AGI * 0.38;
+        const acc = 0.78 + AGI * 0.012 + INT * 0.006;
+        const eva = 0.05 + AGI * 0.012;
+        const crit = 0.1 + INT * 0.01 + AGI * 0.006;
+        const focus = 0.08 + WIL * 0.018;
+        return { STR, AGI, INT, VIT, WIL, hp, atk, psi, def, res, spd, acc, eva, crit, focus };
+      }
+
+      function applyMods(stats, trait, style, augments, modifiers = {}) {
+        const traitData = TRAITS.find((t) => t.id === trait);
+        const styleData = COMBAT_STYLES.find((s) => s.id === style);
+        let derived = { ...stats, dmgMul: 1, spdMul: 1, evaMul: 1, critMul: 1, dmgTakenMul: 1, meterGain: 1, comboCap: 100, lifesteal: 0, shield: 0 };
+        if (traitData) {
+          const mods = traitData.mods;
+          derived = {
+            ...derived,
+            dmgMul: derived.dmgMul * (mods.dmgMul ?? 1),
+            dmgTakenMul: derived.dmgTakenMul * (mods.dmgTakenMul ?? 1),
+            spdMul: derived.spdMul * (mods.spdMul ?? 1),
+            critMul: derived.critMul * (mods.critMul ?? 1),
+            evaMul: derived.evaMul * (mods.evaMul ?? 1),
+            comboCap: derived.comboCap + (mods.comboCap ?? 0),
+            lifesteal: derived.lifesteal + (mods.lifesteal ?? 0),
+            augmentBoost: mods.augmentBoost ?? 1,
+            extraTurn: mods.extraTurn ?? 0,
+            counterChance: (derived.counterChance ?? 0) + (mods.counter ?? 0),
+            adaptive: mods.adaptive ?? false,
+            cloak: mods.cloak ?? false,
+            overheat: mods.overheat ?? false,
+            omni: mods.omni ?? 1,
+            timelineSteal: mods.timelineSteal ?? 0,
+            duplicate: mods.duplicate ?? 0,
+            soulShield: mods.soulShield ?? 0,
+            trueDamage: mods.trueDamage ?? 0,
+            shred: mods.shred ?? 0,
+            psiBurn: mods.psiBurn ?? 0,
+            overheat: mods.overheat ?? derived.overheat,
+            clutch: mods.clutch ?? 0
+          };
+        }
+        if (styleData) {
+          const mods = styleData.mods;
+          derived = {
+            ...derived,
+            dmgMul: derived.dmgMul * (mods.dmgMul ?? 1),
+            spdMul: derived.spdMul * (mods.spdMul ?? 1),
+            evaMul: derived.evaMul * (mods.evaMul ?? 1),
+            critMul: derived.critMul * (mods.critMul ?? 1),
+            comboCap: derived.comboCap + (mods.comboGain ?? 0),
+            shred: (derived.shred ?? 0) + (mods.shred ?? 0),
+            counterChance: (derived.counterChance ?? 0) + (mods.counter ?? 0),
+            duplicate: (derived.duplicate ?? 0) + (mods.duplicate ?? 0),
+            timelineSteal: (derived.timelineSteal ?? 0) + (mods.timelineSteal ?? 0),
+            soulShield: (derived.soulShield ?? 0) + (mods.soulShield ?? 0),
+            trueDamage: (derived.trueDamage ?? 0) + (mods.trueDamage ?? 0),
+            overheat: derived.overheat || mods.overheat || false,
+            psiBurn: (derived.psiBurn ?? 0) + (mods.psiBurn ?? 0)
+          };
+        }
+        const augmentBoost = derived.augmentBoost ?? 1;
+        augments.forEach((id) => {
+          const augment = AUGMENTS.find((a) => a.id === id);
+          if (!augment) return;
+          switch (augment.id) {
+            case "kinetic_tuner":
+              derived.comboCap += Math.round(12 * augmentBoost);
+              derived.spdMul *= 1 + 0.06 * augmentBoost;
+              break;
+            case "ion_barrier":
+              derived.shield += Math.round(25 * augmentBoost);
+              break;
+            case "nanoforge":
+              derived.regen = (derived.regen ?? 0) + Math.round(8 * augmentBoost);
+              break;
+            case "plasma_edge":
+              derived.critMul *= 1 + 0.14 * augmentBoost;
+              break;
+            case "echo_drive":
+              derived.signatureRepeat = (derived.signatureRepeat ?? 0) + 0.25 * augmentBoost;
+              break;
+            case "aether_lattice":
+              derived.shield += Math.round(stats.INT * 2.4 * augmentBoost);
+              break;
+            case "blood_rune":
+              derived.lifesteal += 0.12 * augmentBoost;
+              break;
+            case "sentinel_matrix":
+              derived.dmgTakenMul *= 1 - 0.12 * augmentBoost;
+              derived.res += 0.06 * augmentBoost;
+              break;
+            default:
+              break;
+          }
+        });
+        derived = {
+          ...derived,
+          hp: stats.hp * (derived.omni ?? 1),
+          atk: stats.atk * (derived.omni ?? 1),
+          psi: stats.psi * (derived.omni ?? 1),
+          def: stats.def * (derived.omni ?? 1),
+          res: stats.res + (derived.res ?? 0),
+          spd: stats.spd * derived.spdMul,
+          acc: stats.acc,
+          eva: stats.eva * derived.evaMul,
+          crit: stats.crit * derived.critMul,
+          focus: stats.focus,
+          dmgMul: derived.dmgMul,
+          dmgTakenMul: derived.dmgTakenMul,
+          lifesteal: derived.lifesteal ?? 0,
+          regen: derived.regen ?? 0
+        };
+        return { ...derived, combo: 0, meter: 0 };
+      }
+
+      function formatPct(value) {
+        return `${Math.round(value * 100)}%`;
+      }
+
+      function rollDamage(attacker, defender, context) {
+        const signature = SIGNATURE_MOVES.find((m) => m.id === context.signature);
+        const variance = 1 + (Math.random() * 0.3 - 0.15);
+        const basePower = attacker.atk * attacker.dmgMul * variance;
+        let damage = basePower - defender.def * defender.dmgTakenMul * 0.52;
+        damage = Math.max(8, damage);
+        const critChance = clamp(attacker.crit, 0.05, 0.7);
+        const crit = chance(critChance);
+        if (crit) {
+          damage *= 1.8;
+        }
+        let ability = null;
+        if (attacker.combo > 40 && chance(0.32)) {
+          ability = "Combo Finisher";
+          damage *= 1.24;
+          attacker.meter += 10;
+        }
+        if (signature && chance(0.08 + attacker.meter / 200)) {
+          ability = signature.name;
+          damage += signature.base + attacker.combo * 0.22;
+          attacker.meter += signature.meter;
+          if (attacker.signatureRepeat && chance(attacker.signatureRepeat)) {
+            damage += signature.base * 0.75;
+          }
+        }
+        if (attacker.trueDamage) {
+          damage += attacker.trueDamage * 100;
+        }
+        if (attacker.shred) {
+          damage += defender.def * attacker.shred;
+        }
+        if (attacker.psiBurn && chance(0.32)) {
+          ability = (ability ? ability + " + " : "") + "Psi Burn";
+          defender.meter = Math.max(0, defender.meter - 18);
+          damage += attacker.psi * 0.35;
+        }
+        if (attacker.overheat && chance(0.25)) {
+          ability = (ability ? ability + " + " : "") + "Overheat";
+          damage += attacker.atk * 0.4;
+          attacker.hp -= 6;
+        }
+        return { damage, crit, ability };
+      }
+
+      function hazardEvent(mode, arena, round) {
+        const intensity = mode.modifiers.hazardIntensity;
+        const base = {
+          name: arena.hazard,
+          effect: `Hazard intensifies by ${Math.round(intensity * round * 4)}%`,
+          damage: Math.round(intensity * (12 + round * 2))
+        };
+        return base;
+      }
+
+      function applyUltimate(attacker, defender, ultimateId, summary, timeline) {
+        const ultimate = ULTIMATE_ABILITIES.find((u) => u.id === ultimateId);
+        if (!ultimate) return;
+        summary.push(`${attacker.name} activated ${ultimate.name}!`);
+        attacker.meter = 0;
+        switch (ultimate.id) {
+          case "limit_break":
+            const hits = 4 + Math.floor(attacker.combo / 30);
+            let burst = 0;
+            for (let i = 0; i < hits; i++) {
+              const chunk = attacker.atk * attacker.dmgMul * (1 + attacker.combo / 120);
+              burst += chunk;
+            }
+            defender.hp -= burst;
+            timeline.push({ type: "ultimate", actor: attacker.name, text: `Limit Break hits ${hits} times for ${Math.round(burst)} damage!` });
+            break;
+          case "time_reversal":
+            const heal = attacker.maxHp * 0.4;
+            attacker.hp = clamp(attacker.hp + heal, 0, attacker.maxHp);
+            defender.skipNext = true;
+            timeline.push({ type: "ultimate", actor: attacker.name, text: `Time rewinds, restoring ${Math.round(heal)} HP and skipping ${defender.name}'s turn!` });
+            break;
+          case "ascendant_guard":
+            const shield = attacker.maxHp * 0.6;
+            attacker.shield += shield;
+            timeline.push({ type: "ultimate", actor: attacker.name, text: `A radiant bulwark grants ${Math.round(shield)} shield.` });
+            break;
+          case "anima_surge":
+            attacker.dmgMul *= 2;
+            attacker.lifesteal += 0.25;
+            attacker.animaRounds = 2;
+            timeline.push({ type: "ultimate", actor: attacker.name, text: `Anima Surges! Damage doubled and lifesteal empowered.` });
+            break;
+          case "nebula_gate":
+            attacker.avatarRounds = 2;
+            timeline.push({ type: "ultimate", actor: attacker.name, text: `Astral avatar fights alongside dealing spectral damage.` });
+            break;
+          default:
+            break;
+        }
+      }
+
+      function executeTurn(state, actor, target, mode, arena, timeline, summary) {
+        if (actor.skipNext) {
+          timeline.push({ type: "skip", actor: actor.name, text: `${actor.name} is caught in a temporal delay.` });
+          actor.skipNext = false;
+          return;
+        }
+        const acc = clamp(actor.acc - target.eva * 0.6, 0.1, 0.98);
+        if (!chance(acc)) {
+          timeline.push({ type: "miss", actor: actor.name, text: `${actor.name} misses as ${target.name} evades!` });
+          actor.combo = Math.max(0, actor.combo - 10);
+          return;
+        }
+        const { damage, crit, ability } = rollDamage(actor, target, actor);
+        let totalDamage = damage;
+        if (actor.combo >= actor.comboCap) {
+          totalDamage *= 1.35;
+          timeline.push({ type: "combo", actor: actor.name, text: `${actor.name} unleashes a MAX combo!` });
+        }
+        if (actor.avatarRounds) {
+          const avatarDmg = actor.psi * 1.2;
+          totalDamage += avatarDmg;
+          actor.avatarRounds -= 1;
+          timeline.push({ type: "avatar", actor: actor.name, text: `Astral avatar lashes for ${Math.round(avatarDmg)} spectral damage.` });
+        }
+        target.shield = Math.max(0, target.shield);
+        let dmgAfterShield = totalDamage;
+        if (target.shield > 0) {
+          const absorbed = Math.min(target.shield, totalDamage);
+          target.shield -= absorbed;
+          dmgAfterShield -= absorbed;
+          if (absorbed > 0) {
+            timeline.push({ type: "shield", actor: target.name, text: `${target.name}'s shield absorbs ${Math.round(absorbed)} damage.` });
+          }
+        }
+        dmgAfterShield = Math.max(0, dmgAfterShield);
+        target.hp -= dmgAfterShield;
+        actor.meter += 12 + mode.modifiers.bonusMeter;
+        actor.combo = Math.min(actor.combo + 14, actor.comboCap);
+        if (actor.timelineSteal && chance(actor.timelineSteal)) {
+          timeline.push({ type: "timeline", actor: actor.name, text: `${actor.name} steals momentum, acting again!` });
+          executeTurn(state, actor, target, mode, arena, timeline, summary);
+        }
+        if (crit) {
+          timeline.push({ type: "crit", actor: actor.name, text: `Critical hit! ${actor.name} deals ${Math.round(totalDamage)} damage.` });
+        } else {
+          timeline.push({ type: "hit", actor: actor.name, text: `${actor.name} deals ${Math.round(totalDamage)} damage.` });
+        }
+        if (ability) {
+          timeline.push({ type: "ability", actor: actor.name, text: `${ability} activates!` });
+        }
+        if (actor.lifesteal && dmgAfterShield > 0) {
+          const heal = dmgAfterShield * actor.lifesteal;
+          actor.hp = clamp(actor.hp + heal, 0, actor.maxHp);
+          timeline.push({ type: "lifesteal", actor: actor.name, text: `${actor.name} siphons ${Math.round(heal)} HP!` });
+        }
+        if (actor.animaRounds) {
+          actor.animaRounds -= 1;
+          if (actor.animaRounds <= 0) {
+            actor.dmgMul /= 2;
+            actor.lifesteal -= 0.25;
+          }
+        }
+        if (actor.combo > 80 && chance(0.22)) {
+          actor.meter += 16;
+          timeline.push({ type: "combo", actor: actor.name, text: `${actor.name}'s chain builds extra meter!` });
+        }
+        if (actor.meter >= 100 && actor.ultimate) {
+          applyUltimate(actor, target, actor.ultimate, summary, timeline);
+        }
+        if (target.hp <= 0 && target.anomalyProtect) {
+          target.hp = Math.round(target.maxHp * 0.2);
+          target.anomalyProtect = false;
+          timeline.push({ type: "revive", actor: target.name, text: `${target.name} is revived by anomaly safeguard!` });
+        }
+      }
+
+      function prepareFighter(loadout, mode) {
+        const stats = deriveStats(loadout.stats);
+        const mods = mode.modifiers || {};
+        let fighter = applyMods(stats, loadout.trait, loadout.style, loadout.augments, mods);
+        fighter.name = loadout.name;
+        fighter.story = loadout.story;
+        fighter.signature = loadout.signature;
+        fighter.ultimate = loadout.ultimate;
+        fighter.color = loadout.color;
+        fighter.emblem = loadout.emblem;
+        fighter.maxHp = fighter.hp * (mods.hpMul ?? 1);
+        fighter.hp = fighter.maxHp;
+        fighter.meter = 0;
+        fighter.combo = 0;
+        fighter.shield += Math.round((mods.hpMul ?? 1) * 10);
+        fighter.support = loadout.support;
+        fighter.anomalyProtect = false;
+        return fighter;
+      }
+
+      function simulateBattle(config) {
+        const mode = config.mode;
+        const arena = config.arena;
+        const timeline = [];
+        const summary = [];
+        const player = prepareFighter(config.player, mode);
+        const rival = prepareFighter(config.rival, mode);
+
+        if (mode.modifiers.supportAlly && config.support) {
+          summary.push(`Support Synth ${config.support.name} deployed: ${config.support.effect}`);
+          player.supportSynth = config.support;
+        }
+        if (mode.modifiers.anomalyStacks) {
+          player.anomalyProtect = true;
+          rival.anomalyProtect = true;
+          summary.push("Anomaly fields grant one-time revive shields!");
+        }
+
+        player.hp += player.shield;
+        rival.hp += rival.shield;
+        player.maxHp += player.shield;
+        rival.maxHp += rival.shield;
+
+        let round = 1;
+        while (round <= mode.rounds && player.hp > 0 && rival.hp > 0) {
+          summary.push(`Round ${round}`);
+          const hazard = hazardEvent(mode, arena, round);
+          summary.push(`${arena.name} hazard: ${hazard.name} (${hazard.effect})`);
+          player.hp -= hazard.damage * 0.4;
+          rival.hp -= hazard.damage * 0.4;
+          if (player.supportSynth && player.supportSynth.id === "atlas") {
+            player.shield += 15;
+            rival.shield += 15;
+          }
+          if (player.supportSynth && player.supportSynth.id === "aurora") {
+            player.hp = clamp(player.hp + 8, 0, player.maxHp);
+          }
+          if (player.supportSynth && player.supportSynth.id === "helio") {
+            player.meter += 12;
+          }
+          if (config.support && config.support.id === "nyx") {
+            if (player.cloak) {
+              player.dmgMul *= 1.08;
+            }
+          }
+
+          const actors = [player, rival].sort((a, b) => b.spd - a.spd + Math.random() * 0.3);
+          actors.forEach((actor) => {
+            const target = actor === player ? rival : player;
+            if (actor.hp <= 0 || target.hp <= 0) return;
+            executeTurn({ round }, actor, target, mode, arena, timeline, summary);
+            if (target.hp <= 0) return;
+            if (actor.extraTurn && chance(actor.extraTurn)) {
+              timeline.push({ type: "extra", actor: actor.name, text: `${actor.name} gains an extra action!` });
+              executeTurn({ round }, actor, target, mode, arena, timeline, summary);
+            }
+            if (mode.modifiers.timeSkips && chance(mode.modifiers.timeSkips)) {
+              timeline.push({ type: "skip", actor: target.name, text: `${target.name} is frozen in time!` });
+              target.skipNext = true;
+            }
+          });
+
+          if (player.regen) {
+            player.hp = clamp(player.hp + player.regen, 0, player.maxHp);
+            timeline.push({ type: "regen", actor: player.name, text: `${player.name} regenerates ${Math.round(player.regen)} HP.` });
+          }
+          if (rival.regen) {
+            rival.hp = clamp(rival.hp + rival.regen, 0, rival.maxHp);
+            timeline.push({ type: "regen", actor: rival.name, text: `${rival.name} regenerates ${Math.round(rival.regen)} HP.` });
+          }
+
+          round += 1;
+        }
+
+        const winner = player.hp > rival.hp ? player : rival;
+        const loser = winner === player ? rival : player;
+        const verdict = player.hp === rival.hp ? "Draw" : `${winner.name} triumphs!`;
+        summary.push(`Final Verdict: ${verdict}`);
+        summary.push(`${winner.name} HP: ${Math.max(0, Math.round(winner.hp))}`);
+        summary.push(`${loser.name} HP: ${Math.max(0, Math.round(loser.hp))}`);
+
+        return { timeline, summary, winner: player.hp === rival.hp ? null : winner === player ? "player" : "rival" };
+      }
+
+      function StatField({ label, value, onChange, min = 1, max = 12 }) {
+        return (
+          <label className="flex flex-col gap-1 text-xs uppercase tracking-wider">
+            <span>{label}</span>
+            <input
+              type="range"
+              min={min}
+              max={max}
+              value={value}
+              onChange={(e) => onChange(parseInt(e.target.value, 10))}
+              className="w-full"
+            />
+            <span className="text-sm font-semibold">{value}</span>
+          </label>
+        );
+      }
+
+      function SelectField({ label, value, onChange, options }) {
+        return (
+          <label className="flex flex-col gap-1 text-xs uppercase tracking-wider">
+            <span>{label}</span>
+            <select
+              value={value}
+              onChange={(e) => onChange(e.target.value)}
+              className="bg-slate-900/70 border border-slate-700 rounded px-3 py-2 text-sm"
+            >
+              {options.map((opt) => (
+                <option key={opt.id} value={opt.id}>
+                  {opt.name}
+                </option>
+              ))}
+            </select>
+          </label>
+        );
+      }
+
+      function FighterCard({ loadout, onChange }) {
+        const stats = loadout.stats;
+        return (
+          <div className="glass-panel rounded-xl border border-slate-700 shadow-2xl p-5 space-y-4">
+            <div className="flex items-center justify-between">
+              <input
+                value={loadout.name}
+                onChange={(e) => onChange({ ...loadout, name: e.target.value })}
+                className="text-2xl font-bold bg-transparent border-b border-slate-600 focus:outline-none"
+              />
+              <input
+                value={loadout.emblem}
+                onChange={(e) => onChange({ ...loadout, emblem: e.target.value })}
+                maxLength={2}
+                className="text-3xl bg-transparent w-14 text-center"
+              />
+            </div>
+            <textarea
+              value={loadout.story}
+              onChange={(e) => onChange({ ...loadout, story: e.target.value })}
+              className="w-full bg-slate-900/70 border border-slate-700 rounded p-3 text-sm"
+              placeholder="Origin story"
+              rows={3}
+            />
+            <div className="grid grid-cols-5 gap-3">
+              {CORE_STATS.map((key) => (
+                <StatField
+                  key={key}
+                  label={key}
+                  value={stats[key]}
+                  onChange={(val) => onChange({ ...loadout, stats: { ...stats, [key]: val } })}
+                />
+              ))}
+            </div>
+            <SelectField
+              label="Trait"
+              value={loadout.trait}
+              onChange={(val) => onChange({ ...loadout, trait: val })}
+              options={TRAITS}
+            />
+            <SelectField
+              label="Combat Style"
+              value={loadout.style}
+              onChange={(val) => onChange({ ...loadout, style: val })}
+              options={COMBAT_STYLES}
+            />
+            <SelectField
+              label="Signature Move"
+              value={loadout.signature}
+              onChange={(val) => onChange({ ...loadout, signature: val })}
+              options={SIGNATURE_MOVES}
+            />
+            <SelectField
+              label="Ultimate"
+              value={loadout.ultimate}
+              onChange={(val) => onChange({ ...loadout, ultimate: val })}
+              options={ULTIMATE_ABILITIES}
+            />
+            <label className="flex flex-col gap-1 text-xs uppercase tracking-wider">
+              <span>Augments (select up to 3)</span>
+              <div className="grid sm:grid-cols-3 gap-2 text-sm">
+                {AUGMENTS.map((aug) => {
+                  const active = loadout.augments.includes(aug.id);
+                  return (
+                    <button
+                      key={aug.id}
+                      onClick={() => {
+                        const exists = loadout.augments.includes(aug.id);
+                        if (exists) {
+                          onChange({ ...loadout, augments: loadout.augments.filter((a) => a !== aug.id) });
+                        } else if (loadout.augments.length < 3) {
+                          onChange({ ...loadout, augments: [...loadout.augments, aug.id] });
+                        }
+                      }}
+                      className={`text-left border rounded px-3 py-2 transition ${
+                        active ? "border-cyan-300 bg-cyan-500/20" : "border-slate-700 bg-slate-900/50"
+                      }`}
+                    >
+                      <div className="font-semibold">{aug.name}</div>
+                      <div className="text-xs text-slate-300">{aug.desc}</div>
+                    </button>
+                  );
+                })}
+              </div>
+            </label>
+            <div className="grid grid-cols-2 gap-3">
+              <label className="flex flex-col gap-1 text-xs uppercase tracking-wider">
+                <span>Energy Color</span>
+                <input
+                  type="color"
+                  value={loadout.color}
+                  onChange={(e) => onChange({ ...loadout, color: e.target.value })}
+                  className="h-10"
+                />
+              </label>
+              <label className="flex flex-col gap-1 text-xs uppercase tracking-wider">
+                <span>Support Synth</span>
+                <select
+                  value={loadout.support ?? ""}
+                  onChange={(e) => onChange({ ...loadout, support: e.target.value || null })}
+                  className="bg-slate-900/70 border border-slate-700 rounded px-3 py-2 text-sm"
+                >
+                  <option value="">None</option>
+                  {SUPPORT_SYNTHS.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+          </div>
+        );
+      }
+
+      function SummaryPanel({ summary }) {
+        return (
+          <div className="glass-panel rounded-xl border border-purple-500/40 p-5 space-y-2 max-h-[24rem] overflow-y-auto">
+            <h3 className="text-lg font-semibold text-purple-200">Match Summary</h3>
+            {summary.map((line, idx) => (
+              <p key={idx} className="text-sm text-slate-200">
+                {line}
+              </p>
+            ))}
+          </div>
+        );
+      }
+
+      function TimelinePanel({ timeline }) {
+        return (
+          <div className="glass-panel rounded-xl border border-cyan-500/40 p-5 space-y-2 max-h-[32rem] overflow-y-auto">
+            <h3 className="text-lg font-semibold text-cyan-200">Combat Timeline</h3>
+            {timeline.map((event, idx) => (
+              <div key={idx} className="text-sm flex gap-2">
+                <span className="text-cyan-400">[{event.actor}]</span>
+                <span>{event.text}</span>
+              </div>
+            ))}
+          </div>
+        );
+      }
+
+      function ModePanel({ mode, arena }) {
+        return (
+          <div className="glass-panel rounded-xl border border-amber-500/30 p-5 space-y-3">
+            <h2 className="text-xl font-semibold text-amber-200">{mode.name}</h2>
+            <p className="text-sm text-slate-200">{mode.desc}</p>
+            <div className="text-xs text-slate-300 uppercase tracking-wider">Arena: {arena.name}</div>
+            <div className="text-xs text-slate-300 uppercase tracking-wider">Hazard: {arena.hazard}</div>
+            <div className="text-xs text-slate-300 uppercase tracking-wider">Weather Variants: {arena.weather.join(", ")}</div>
+            <div className="text-xs text-slate-300 uppercase tracking-wider">Rounds: {mode.rounds}</div>
+          </div>
+        );
+      }
+
+      function RivalSelector({ rival, onChange }) {
+        return (
+          <div className="glass-panel border border-rose-500/40 rounded-xl p-5 space-y-3">
+            <h3 className="text-lg font-semibold text-rose-200">Rival Combatant</h3>
+            <select
+              value={rival.name}
+              onChange={(e) => {
+                const preset = RIVAL_PRESETS.find((p) => p.name === e.target.value);
+                onChange(preset);
+              }}
+              className="bg-slate-900/70 border border-slate-700 rounded px-3 py-2 text-sm"
+            >
+              {RIVAL_PRESETS.map((preset) => (
+                <option key={preset.name} value={preset.name}>
+                  {preset.name}
+                </option>
+              ))}
+            </select>
+            <p className="text-sm text-slate-200">{rival.story}</p>
+            <div className="grid grid-cols-5 text-xs gap-2 text-slate-300">
+              {CORE_STATS.map((key) => (
+                <div key={key} className="bg-slate-900/40 rounded p-2 text-center">
+                  <div className="font-semibold text-slate-100">{key}</div>
+                  <div>{rival.stats[key]}</div>
+                </div>
+              ))}
+            </div>
+            <div className="flex flex-wrap gap-2 text-xs text-slate-200">
+              <span className="px-3 py-1 rounded bg-rose-500/20 border border-rose-400/30">Trait: {TRAITS.find((t) => t.id === rival.trait)?.name}</span>
+              <span className="px-3 py-1 rounded bg-rose-500/20 border border-rose-400/30">Style: {COMBAT_STYLES.find((s) => s.id === rival.style)?.name}</span>
+              <span className="px-3 py-1 rounded bg-rose-500/20 border border-rose-400/30">Signature: {SIGNATURE_MOVES.find((m) => m.id === rival.signature)?.name}</span>
+              <span className="px-3 py-1 rounded bg-rose-500/20 border border-rose-400/30">Ultimate: {ULTIMATE_ABILITIES.find((u) => u.id === rival.ultimate)?.name}</span>
+            </div>
+          </div>
+        );
+      }
+
+      function ModeSelector({ mode, arena, onModeChange, onArenaChange }) {
+        return (
+          <div className="glass-panel rounded-xl border border-emerald-500/40 p-5 space-y-4">
+            <h3 className="text-lg font-semibold text-emerald-200">Match Configuration</h3>
+            <label className="flex flex-col gap-1 text-xs uppercase tracking-wider">
+              <span>Mode</span>
+              <select
+                value={mode.id}
+                onChange={(e) => {
+                  const next = GAME_MODES.find((m) => m.id === e.target.value);
+                  onModeChange(next);
+                }}
+                className="bg-slate-900/70 border border-slate-700 rounded px-3 py-2 text-sm"
+              >
+                {GAME_MODES.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="flex flex-col gap-1 text-xs uppercase tracking-wider">
+              <span>Arena</span>
+              <select
+                value={arena.id}
+                onChange={(e) => {
+                  const next = ARENAS.find((a) => a.id === e.target.value);
+                  onArenaChange(next);
+                }}
+                className="bg-slate-900/70 border border-slate-700 rounded px-3 py-2 text-sm"
+              >
+                {ARENAS.map((a) => (
+                  <option key={a.id} value={a.id}>
+                    {a.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <p className="text-sm text-slate-200">Each arena triggers unique hazards, weather shifts, and stage buffs impacting combo flow, resistance, and ultimate frequency.</p>
+          </div>
+        );
+      }
+
+      function FighterBadge({ fighter, result }) {
+        return (
+          <div className={`glass-panel rounded-xl border p-4 space-y-2 ${result === "winner" ? "border-emerald-400" : "border-slate-700"}`}>
+            <div className="flex items-center gap-3">
+              <div className="text-3xl" style={{ color: fighter.color }}>
+                {fighter.emblem}
+              </div>
+              <div>
+                <h4 className="text-lg font-semibold" style={{ color: fighter.color }}>
+                  {fighter.name}
+                </h4>
+                <p className="text-xs text-slate-300">{fighter.story}</p>
+              </div>
+            </div>
+            <div className="flex flex-wrap gap-2 text-xs text-slate-200">
+              <span className="px-3 py-1 rounded bg-slate-900/60 border border-slate-700">Trait: {TRAITS.find((t) => t.id === fighter.trait)?.name}</span>
+              <span className="px-3 py-1 rounded bg-slate-900/60 border border-slate-700">Style: {COMBAT_STYLES.find((s) => s.id === fighter.style)?.name}</span>
+              <span className="px-3 py-1 rounded bg-slate-900/60 border border-slate-700">Signature: {SIGNATURE_MOVES.find((m) => m.id === fighter.signature)?.name}</span>
+              <span className="px-3 py-1 rounded bg-slate-900/60 border border-slate-700">Ultimate: {ULTIMATE_ABILITIES.find((u) => u.id === fighter.ultimate)?.name}</span>
+            </div>
+          </div>
+        );
+      }
+
+      function useSimulation(player, rival, mode, arena) {
+        return useMemo(() => {
+          return simulateBattle({ player, rival, mode, arena, support: player.support ? SUPPORT_SYNTHS.find((s) => s.id === player.support) : null });
+        }, [player, rival, mode, arena]);
+      }
+
+      function ArenaOverdriveApp() {
+        const [player, setPlayer] = useState(DEFAULT_FIGHTER);
+        const [mode, setMode] = useState(GAME_MODES[0]);
+        const [arena, setArena] = useState(ARENAS[0]);
+        const [rival, setRival] = useState(RIVAL_PRESETS[0]);
+        const result = useSimulation(player, rival, mode, arena);
+        const winner = result.winner === "player" ? player : result.winner === "rival" ? rival : null;
+        const loser = result.winner === "player" ? rival : result.winner === "rival" ? player : null;
+
+        return (
+          <div className="space-y-6">
+            <header className="glass-panel rounded-3xl border border-cyan-500/40 p-6 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
+              <div>
+                <h1 className="text-3xl font-black tracking-tight text-cyan-200">AI Battle Arena: Overdrive Edition</h1>
+                <p className="text-sm text-slate-200 max-w-3xl">
+                  Forge custom combatants with advanced augments, timeline manipulations, support synths, and unleash them across multidimensional battle modes. Experiment with hazard escalations, raid protocols, co-op assists, mythic boss mechanics, and endless rift anomalies.
+                </p>
+              </div>
+              <div className="flex gap-4 text-sm text-slate-200">
+                <div className="flex flex-col items-center">
+                  <span className="text-xl font-bold text-emerald-300">{mode.rounds}</span>
+                  <span>Rounds</span>
+                </div>
+                <div className="flex flex-col items-center">
+                  <span className="text-xl font-bold text-rose-300">{AUGMENTS.length}</span>
+                  <span>Augments</span>
+                </div>
+                <div className="flex flex-col items-center">
+                  <span className="text-xl font-bold text-cyan-300">{TRAITS.length}</span>
+                  <span>Traits</span>
+                </div>
+              </div>
+            </header>
+            <div className="grid xl:grid-cols-[1.2fr,0.8fr] gap-6">
+              <div className="space-y-6">
+                <FighterCard loadout={player} onChange={setPlayer} />
+                <ModeSelector mode={mode} arena={arena} onModeChange={setMode} onArenaChange={setArena} />
+                <ModePanel mode={mode} arena={arena} />
+              </div>
+              <div className="space-y-6">
+                <RivalSelector rival={rival} onChange={setRival} />
+                <div className="grid md:grid-cols-2 gap-4">
+                  <FighterBadge fighter={player} result={result.winner === "player" ? "winner" : result.winner === "rival" ? "loser" : "draw"} />
+                  <FighterBadge fighter={rival} result={result.winner === "rival" ? "winner" : result.winner === "player" ? "loser" : "draw"} />
+                </div>
+              </div>
+            </div>
+            <div className="grid lg:grid-cols-2 gap-6">
+              <SummaryPanel summary={result.summary} />
+              <TimelinePanel timeline={result.timeline} />
+            </div>
+            <footer className="text-xs text-slate-400 text-center pt-6">
+              Built for sandbox experimentation: combine modes, hazards, support synths, and rogue-lite anomalies to craft dream fights.
+            </footer>
+          </div>
+        );
+      }
+
+      ReactDOM.createRoot(document.getElementById("root")).render(<ArenaOverdriveApp />);
+    </script>
+  </body>
+</html>
